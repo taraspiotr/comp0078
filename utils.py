@@ -1,10 +1,11 @@
-from typing import List, Any, Generator, Dict, Tuple, Optional
+from typing import List, Any, Generator, Dict, Tuple, Optional, Callable
 
 import os
 from itertools import product
 
 import numpy as np
 import psutil
+from tqdm import tqdm
 
 
 def product_dict(**kwargs: List[Any]) -> Generator[Dict[str, Any], None, None]:
@@ -68,3 +69,66 @@ class KFold:
             )
             valid_ind = inds[i * split_size : (i + 1) * split_size]
             yield train_ind, valid_ind
+
+
+def _kfold(
+    train_func: Callable,
+    x: np.ndarray,
+    y: np.ndarray,
+    num_classes: int,
+    grid: List[Dict[str, Any]],
+    random_state: int,
+) -> Dict[str, Any]:
+    best_err, best_params = 1, dict()
+    for params in tqdm(grid):
+        kfold = KFold(n_splits=5, shuffle=True, random_state=random_state)
+        errors = []
+        for train_ind, valid_ind in kfold.split(x):
+            x_train, y_train = x[train_ind], y[train_ind]
+            x_valid, y_valid = x[valid_ind], y[valid_ind]
+            _, valid_err = train_func(
+                x_train, y_train, num_classes, params, x_valid=x_valid, y_valid=y_valid
+            )
+            errors.append(valid_err)
+        mean_err = np.mean(errors)
+        if mean_err < best_err:
+            best_err = mean_err
+            best_params = params
+    return best_params
+
+
+def get_cm(model: Any, x: np.ndarray, y: np.ndarray, num_classes: int) -> np.ndarray:
+    cm = np.zeros((num_classes, num_classes))
+    for pred, gt in zip(model.pred(x), y):
+        if pred != gt:
+            cm[pred, gt] += 1
+            cm[gt, pred] += 1
+    return cm / len(y)
+
+
+def run_kfold(
+    train_func: Callable,
+    x: np.ndarray,
+    y: np.ndarray,
+    num_classes: int,
+    grid: List[Dict[str, Any]],
+    random_state: int,
+) -> Tuple[Dict[str, Any], float, np.ndarray]:
+    # pylint: disable=unbalanced-tuple-unpacking
+    x_train, x_test, y_train, y_test = train_test_split(
+        x, y, test_size=0.2, random_state=random_state
+    )
+    best_params = _kfold(train_func, x_train, y_train, num_classes, grid, random_state)
+
+    model, (_, test_err) = train_func(
+        x_train,
+        y_train,
+        num_classes,
+        best_params,
+        x_valid=x_test,
+        y_valid=y_test,
+        return_model=True,
+    )
+    cm = get_cm(model, x_test, y_test, num_classes)
+
+    return best_params, test_err, cm

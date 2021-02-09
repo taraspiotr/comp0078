@@ -1,1 +1,1 @@
-# comp0078
+# MLP and SVM numpy implementations
